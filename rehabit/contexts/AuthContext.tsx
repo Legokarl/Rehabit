@@ -22,6 +22,7 @@ interface UserData {
   badges: string[];
   streakDays: number;
   joinedAt: Date;
+  deletedGroups?: string[]; // Groups that user has "deleted for me"
 }
 
 interface AuthContextType {
@@ -41,19 +42,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [userData, setUserData] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [initializing, setInitializing] = useState(true);
 
   useEffect(() => {
+    // Set up auth state listener
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      console.log('Auth state changed:', user ? 'User logged in' : 'User logged out');
       setUser(user);
+      
       if (user) {
-        await fetchUserData(user.uid);
+        try {
+          await fetchUserData(user.uid);
+        } catch (error) {
+          console.error('Error fetching user data:', error);
+        }
       } else {
         setUserData(null);
       }
+      
       setLoading(false);
+      setInitializing(false);
     });
 
-    return unsubscribe;
+    return () => unsubscribe();
   }, []);
 
   const fetchUserData = async (uid: string) => {
@@ -122,7 +133,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider value={{ user, userData, loading, signIn, signUp, signInWithGoogle, signOut, refreshUserData }}>
-      {children}
+      {!initializing && children}
     </AuthContext.Provider>
   );
 }

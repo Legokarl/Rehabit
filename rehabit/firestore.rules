@@ -66,11 +66,53 @@ service cloud.firestore {
                     && request.resource.data.message.size() > 0
                     && request.resource.data.message.size() <= 500;
       
-      // Users can only delete their own messages
-      allow delete: if request.auth != null && resource.data.userId == request.auth.uid;
+      // Users can delete their own messages OR group creator can delete all messages in their group
+      allow delete: if request.auth != null && (
+        resource.data.userId == request.auth.uid ||
+        get(/databases/$(database)/documents/groups/$(resource.data.groupId)).data.createdBy == request.auth.uid
+      );
       
       // No updates allowed (messages are immutable)
       allow update: if false;
+    }
+    
+    // Statistics collection
+    match /statistics/{userId} {
+      // Users can read their own statistics
+      allow read: if request.auth != null && request.auth.uid == userId;
+      
+      // Users can create/update their own statistics
+      allow create, update: if request.auth != null && request.auth.uid == userId;
+      
+      // No deletion allowed (keep historical data)
+      allow delete: if false;
+    }
+    
+    // Daily Statistics collection
+    match /dailyStats/{statsId} {
+      // Users can read their own daily stats
+      allow read: if request.auth != null && resource.data.userId == request.auth.uid;
+      
+      // Users can create/update their own daily stats
+      allow create, update: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      
+      // No deletion allowed (keep historical data)
+      allow delete: if false;
+    }
+    
+    // Community Challenges collection
+    match /communityChallenges/{challengeId} {
+      // Anyone authenticated can read challenges
+      allow read: if request.auth != null;
+      
+      // Anyone authenticated can create challenges
+      allow create: if request.auth != null;
+      
+      // Anyone authenticated can update challenges (for joining/progress)
+      allow update: if request.auth != null;
+      
+      // No deletion for now (keep challenge history)
+      allow delete: if false;
     }
   }
 }

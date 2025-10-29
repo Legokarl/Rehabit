@@ -1,17 +1,18 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Plus, Users, MessageCircle, LogIn, LogOut as LeaveIcon, 
   Hash, Search, Send, Sparkles, TrendingUp, Heart, 
-  Book, Dumbbell, Brain, Coffee, X
+  Book, Dumbbell, Brain, Coffee, X, Trash2, AlertTriangle,
+  MoreVertical, Link2, Copy, Check, UserPlus, Share2, MessageSquare
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { 
   collection, addDoc, query, where, getDocs, 
   updateDoc, doc, arrayUnion, arrayRemove, orderBy,
-  onSnapshot, Timestamp
+  onSnapshot, Timestamp, serverTimestamp, deleteDoc
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { format } from 'date-fns';
@@ -37,6 +38,7 @@ interface Message {
   userPhoto: string | null;
   message: string;
   createdAt: Date;
+  type?: 'user' | 'system'; // system messages for join/leave events
 }
 
 const categories = [
@@ -52,7 +54,7 @@ const categories = [
 const groupIcons = ['🎯', '💪', '📚', '🧘', '💧', '🏃', '🎨', '🎵', '✍️', '🌱', '🔥', '⭐', '🚀', '💡', '🎓', '🏆'];
 
 export default function CommunityGroups() {
-  const { user, userData } = useAuth();
+  const { user, userData, refreshUserData } = useAuth();
   const [groups, setGroups] = useState<Group[]>([]);
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [showCreateGroup, setShowCreateGroup] = useState(false);
@@ -60,6 +62,16 @@ export default function CommunityGroups() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [showDeleteForMeConfirm, setShowDeleteForMeConfirm] = useState(false);
+  const [groupToDelete, setGroupToDelete] = useState<Group | null>(null); // Store group for modal
+  const [groupToLeave, setGroupToLeave] = useState<Group | null>(null); // Store group for modal
+  const [showGroupMenu, setShowGroupMenu] = useState(false);
+  const [showInviteLink, setShowInviteLink] = useState(false);
+  const [inviteLink, setInviteLink] = useState('');
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
   const [newGroup, setNewGroup] = useState({
     name: '',
     description: '',
@@ -71,41 +83,81 @@ export default function CommunityGroups() {
     fetchGroups();
   }, []);
 
+  // Refetch groups when userData changes (especially deletedGroups)
+  useEffect(() => {
+    if (userData) {
+      console.log('👤 userData changed, refetching groups...');
+      fetchGroups();
+    }
+  }, [userData?.deletedGroups]);
+
   useEffect(() => {
     if (selectedGroup) {
-      // Real-time listener for messages
+      // Real-time listener for messages with server-side ordering
       const messagesQuery = query(
         collection(db, 'groupMessages'),
         where('groupId', '==', selectedGroup.id),
         orderBy('createdAt', 'asc')
       );
 
-      const unsubscribe = onSnapshot(messagesQuery, (snapshot) => {
+      const unsubscribe = onSnapshot(
+        messagesQuery, 
+        (snapshot) => {
         const messagesData = snapshot.docs.map(doc => ({
           id: doc.id,
           ...doc.data(),
           createdAt: doc.data().createdAt?.toDate() || new Date(),
         })) as Message[];
+          
         setMessages(messagesData);
-      });
+        },
+        (error) => {
+          console.error('Error in message listener:', error);
+          alert(`Error loading messages: ${error.message}`);
+        }
+      );
 
       return () => unsubscribe();
+    } else {
+      // Clear messages when no group is selected
+      setMessages([]);
     }
   }, [selectedGroup]);
 
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages]);
+
   const fetchGroups = async () => {
+    console.log('🔄 Fetching groups...');
     try {
       const q = query(collection(db, 'groups'));
       const querySnapshot = await getDocs(q);
-      const groupsData = querySnapshot.docs.map(doc => ({
+      let groupsData = querySnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data(),
         createdAt: doc.data().createdAt?.toDate() || new Date(),
         memberCount: doc.data().members?.length || 0,
       })) as Group[];
+      
+      console.log(`📊 Total groups fetched: ${groupsData.length}`);
+      console.log('🗑️ Deleted groups from userData:', userData?.deletedGroups || []);
+      
+      // Filter out groups that user has "deleted for me"
+      if (user && userData?.deletedGroups && userData.deletedGroups.length > 0) {
+        const beforeFilter = groupsData.length;
+        groupsData = groupsData.filter(group => !userData.deletedGroups!.includes(group.id));
+        console.log(`✂️ Filtered ${beforeFilter - groupsData.length} deleted groups`);
+        console.log(`✅ Groups after filter: ${groupsData.length}`);
+      }
+      
       setGroups(groupsData);
+      console.log('✅ Groups state updated');
     } catch (error) {
-      console.error('Error fetching groups:', error);
+      console.error('❌ Error fetching groups:', error);
     }
   };
 
@@ -113,7 +165,7 @@ export default function CommunityGroups() {
     if (!user || !userData || !newGroup.name) return;
 
     try {
-      await addDoc(collection(db, 'groups'), {
+      const groupDoc = await addDoc(collection(db, 'groups'), {
         name: newGroup.name,
         description: newGroup.description,
         category: newGroup.category,
@@ -122,6 +174,17 @@ export default function CommunityGroups() {
         createdByName: userData.displayName,
         members: [user.uid],
         createdAt: new Date(),
+      });
+
+      // Send system message that group was created
+      await addDoc(collection(db, 'groupMessages'), {
+        groupId: groupDoc.id,
+        userId: user.uid,
+        userName: userData.displayName || 'Anonymous',
+        userPhoto: userData.photoURL || null,
+        message: `${userData.displayName || 'Anonymous'} created this group`,
+        createdAt: serverTimestamp(),
+        type: 'system',
       });
 
       setNewGroup({ name: '', description: '', category: 'productivity', icon: '🎯' });
@@ -133,54 +196,264 @@ export default function CommunityGroups() {
   };
 
   const joinGroup = async (group: Group) => {
-    if (!user) return;
+    if (!user || !userData) return;
 
     try {
       const groupRef = doc(db, 'groups', group.id);
       await updateDoc(groupRef, {
         members: arrayUnion(user.uid)
       });
-      fetchGroups();
+      
+      // Send system message that user joined
+      await addDoc(collection(db, 'groupMessages'), {
+        groupId: group.id,
+        userId: user.uid,
+        userName: userData.displayName || 'Anonymous',
+        userPhoto: userData.photoURL || null,
+        message: `${userData.displayName || 'Anonymous'} joined the group`,
+        createdAt: serverTimestamp(),
+        type: 'system',
+      });
+      
+      await fetchGroups(); // Wait for refresh
     } catch (error) {
       console.error('Error joining group:', error);
+      alert('Error joining group. Please try again.');
     }
   };
 
   const leaveGroup = async (group: Group) => {
-    if (!user) return;
+    if (!user || !userData) {
+      console.error('No user or userData');
+      return;
+    }
+
+    console.log('Leaving group:', group.id);
 
     try {
+      // Send system message that user left BEFORE removing from members
+      console.log('Posting leave message...');
+      await addDoc(collection(db, 'groupMessages'), {
+        groupId: group.id,
+        userId: user.uid,
+        userName: userData.displayName || 'Anonymous',
+        userPhoto: userData.photoURL || null,
+        message: `${userData.displayName || 'Anonymous'} left the group`,
+        createdAt: serverTimestamp(),
+        type: 'system',
+      });
+      
+      console.log('Removing user from members...');
       const groupRef = doc(db, 'groups', group.id);
       await updateDoc(groupRef, {
         members: arrayRemove(user.uid)
       });
       
-      if (selectedGroup?.id === group.id) {
-        setSelectedGroup(null);
-      }
+      console.log('User left successfully');
       
-      fetchGroups();
-    } catch (error) {
+      // Close modals and reset state
+      setShowLeaveConfirm(false);
+        setSelectedGroup(null);
+      setShowGroupMenu(false);
+      
+      // Refresh groups list
+      await fetchGroups();
+      
+      alert(`You have left "${group.name}"`);
+    } catch (error: any) {
       console.error('Error leaving group:', error);
+      console.error('Error code:', error.code);
+      console.error('Error message:', error.message);
+      alert(`Error leaving group: ${error.message}. Please try again.`);
     }
   };
 
-  const sendMessage = async () => {
+  const deleteGroup = async (group: Group) => {
+    if (!user || !userData) {
+      console.error('No user or userData');
+      return;
+    }
+    
+    // Only creator can delete
+    if (group.createdBy !== user.uid) {
+      alert('Only the group creator can delete this group.');
+      return;
+    }
+
+    console.log('Starting group deletion:', group.id);
+
+    try {
+      // Delete all messages in the group first
+      const messagesQuery = query(
+        collection(db, 'groupMessages'),
+        where('groupId', '==', group.id)
+      );
+      
+      console.log('Fetching messages to delete...');
+      const messagesSnapshot = await getDocs(messagesQuery);
+      console.log(`Found ${messagesSnapshot.docs.length} messages to delete`);
+      
+      if (messagesSnapshot.docs.length > 0) {
+        const deletePromises = messagesSnapshot.docs.map(messageDoc => {
+          console.log('Deleting message:', messageDoc.id);
+          return deleteDoc(doc(db, 'groupMessages', messageDoc.id));
+        });
+        await Promise.all(deletePromises);
+        console.log('All messages deleted');
+      }
+
+      // Delete the group itself
+      console.log('Deleting group document...');
+      const groupRef = doc(db, 'groups', group.id);
+      await deleteDoc(groupRef);
+      console.log('Group document deleted successfully');
+      
+      // Close modal and reset state
+      setShowDeleteConfirm(false);
+      setSelectedGroup(null);
+      setShowGroupMenu(false);
+      
+      // Refresh groups list
+      await fetchGroups();
+      
+      alert(`Group "${group.name}" has been deleted successfully for all members.`);
+    } catch (error: any) {
+      console.error('Error deleting group:', error);
+      console.error('Error code:', error.code);
+      console.error('Error message:', error.message);
+      
+      if (error.code === 'permission-denied') {
+        alert('Permission denied. Only the group creator can delete the group.');
+      } else {
+        alert(`Error deleting group: ${error.message}. Please try again.`);
+      }
+    }
+  };
+
+  const deleteForMe = async (group: Group) => {
+    console.log('=== DELETE FOR ME STARTED ===');
+    console.log('Group:', group.name, group.id);
+    
+    if (!user) {
+      console.error('❌ No user found');
+      alert('You must be logged in to delete a group.');
+      return;
+    }
+
+    if (!userData) {
+      console.error('❌ No userData found');
+      alert('User data not loaded. Please refresh and try again.');
+      return;
+    }
+
+    console.log('✅ User ID:', user.uid);
+    console.log('Current deletedGroups:', userData.deletedGroups || []);
+
+    try {
+      const userRef = doc(db, 'users', user.uid);
+      console.log('📝 Updating user document...');
+      
+      await updateDoc(userRef, {
+        deletedGroups: arrayUnion(group.id)
+      });
+      
+      console.log('✅ Firestore updated successfully');
+      
+      // Refresh user data to update deletedGroups in context
+      console.log('🔄 Refreshing user data...');
+      await refreshUserData();
+      console.log('✅ User data refreshed');
+      
+      // Close modals and reset state
+      setShowDeleteForMeConfirm(false);
+      setSelectedGroup(null);
+      setShowGroupMenu(false);
+      
+      // Refresh groups list
+      console.log('🔄 Refreshing groups list...');
+      await fetchGroups();
+      console.log('✅ Groups list refreshed');
+      
+      console.log('=== DELETE FOR ME COMPLETED ===');
+      alert(`"${group.name}" has been removed from your list. You can rejoin via invite link.`);
+    } catch (error: any) {
+      console.error('❌ ERROR in deleteForMe:');
+      console.error('Error object:', error);
+      console.error('Error code:', error.code);
+      console.error('Error message:', error.message);
+      console.error('Stack:', error.stack);
+      alert(`Error removing group: ${error.message}. Please check console for details.`);
+    }
+  };
+
+  const generateInviteLink = (group: Group) => {
+    const baseUrl = window.location.origin;
+    const link = `${baseUrl}/join-group/${group.id}`;
+    setInviteLink(link);
+    setShowInviteLink(true);
+    setShowGroupMenu(false);
+  };
+
+  const copyInviteLink = () => {
+    navigator.clipboard.writeText(inviteLink);
+    alert('Invite link copied to clipboard!');
+  };
+
+  const shareToWhatsApp = (group: Group) => {
+    const baseUrl = window.location.origin;
+    const link = `${baseUrl}/join-group/${group.id}`;
+    const message = `Hey! Join our group "${group.name}" on Rehabit!\n\n${group.description}\n\n${link}`;
+    const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
+    window.open(whatsappUrl, '_blank');
+    setShowGroupMenu(false);
+  };
+
+  const shareToTelegram = (group: Group) => {
+    const baseUrl = window.location.origin;
+    const link = `${baseUrl}/join-group/${group.id}`;
+    const message = `Hey! Join our group "${group.name}" on Rehabit!\n\n${group.description}\n\n${link}`;
+    const telegramUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(`Join "${group.name}" on Rehabit!\n\n${group.description}`)}`;
+    window.open(telegramUrl, '_blank');
+    setShowGroupMenu(false);
+  };
+
+  const shareViaGeneric = (group: Group) => {
+    const baseUrl = window.location.origin;
+    const link = `${baseUrl}/join-group/${group.id}`;
+    
+    if (navigator.share) {
+      navigator.share({
+        title: `Join ${group.name}`,
+        text: `Hey! Join our group "${group.name}" on Rehabit!\n\n${group.description}`,
+        url: link
+      }).catch(err => console.log('Error sharing:', err));
+    } else {
+      // Fallback: copy to clipboard
+      navigator.clipboard.writeText(link);
+      alert('Link copied to clipboard!');
+    }
+    setShowGroupMenu(false);
+  };
+
+  const sendMessage = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!user || !userData || !selectedGroup || !newMessage.trim()) return;
 
     try {
       await addDoc(collection(db, 'groupMessages'), {
         groupId: selectedGroup.id,
         userId: user.uid,
-        userName: userData.displayName,
-        userPhoto: userData.photoURL,
+        userName: userData.displayName || 'Anonymous',
+        userPhoto: userData.photoURL || null,
         message: newMessage.trim(),
-        createdAt: new Date(),
+        createdAt: serverTimestamp(),
+        type: 'user',
       });
 
       setNewMessage('');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error sending message:', error);
+      alert(`Failed to send message: ${error.message || 'Please try again.'}`);
     }
   };
 
@@ -195,89 +468,257 @@ export default function CommunityGroups() {
     return user && group.members.includes(user.uid);
   };
 
+  const isGroupCreator = (group: Group) => {
+    return user && group.createdBy === user.uid;
+  };
+
   if (selectedGroup) {
     return (
-      <div className="flex flex-col h-[600px]">
+      <>
+      <div className="flex flex-col h-[600px] relative">
         {/* Group Header */}
-        <div className="glass rounded-2xl p-4 mb-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setSelectedGroup(null)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-              <div className="text-3xl">{selectedGroup.icon}</div>
-              <div>
-                <h3 className="text-xl font-bold">{selectedGroup.name}</h3>
-                <p className="text-sm text-gray-600">{selectedGroup.memberCount} members</p>
+        <div className="glass-dark rounded-2xl p-4 mb-4 border border-primary/20 relative z-10">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => {
+                    // Don't close if a modal is open
+                    if (!showDeleteForMeConfirm && !showLeaveConfirm && !showDeleteConfirm) {
+                      setSelectedGroup(null);
+                      setShowGroupMenu(false);
+                      fetchGroups(); // Refresh groups when exiting chat
+                    }
+                  }}
+                  className="p-2 hover:bg-white/10 rounded-lg transition-colors text-gray-300"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+                <div className="text-3xl">{selectedGroup.icon}</div>
+                <div>
+                  <h3 className="text-xl font-bold text-white">{selectedGroup.name}</h3>
+                  <p className="text-sm text-gray-400">{selectedGroup.memberCount} members</p>
+                </div>
               </div>
-            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => generateInviteLink(selectedGroup)}
+                className="flex items-center gap-2 px-4 py-2 bg-primary/20 text-primary hover:bg-primary/30 border border-primary/30 rounded-xl font-semibold transition-colors"
+              >
+                <Link2 className="w-4 h-4" />
+                Invite
+              </button>
             <button
-              onClick={() => leaveGroup(selectedGroup)}
-              className="flex items-center gap-2 px-4 py-2 bg-red-100 text-red-600 hover:bg-red-200 rounded-xl font-semibold transition-colors"
+                ref={menuButtonRef}
+                onClick={() => setShowGroupMenu(!showGroupMenu)}
+                className="p-2 hover:bg-white/10 rounded-lg transition-colors text-gray-300"
             >
-              <LeaveIcon className="w-4 h-4" />
-              Leave
+                <MoreVertical className="w-5 h-5" />
             </button>
+            </div>
           </div>
         </div>
 
         {/* Messages */}
-        <div className="glass rounded-2xl flex-1 overflow-hidden flex flex-col">
+        <div className="glass-dark rounded-2xl flex-1 overflow-hidden flex flex-col border border-primary/20">
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {messages.map((message) => (
+            {messages.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                <MessageCircle className="w-16 h-16 mb-4 opacity-50" />
+                <p className="text-lg font-medium">No messages yet</p>
+                <p className="text-sm">Start the conversation! 👋</p>
+              </div>
+            ) : (
+              messages.map((message) => {
+                // System messages (join/leave) - centered with different style
+                if (message.type === 'system') {
+                  return (
+                    <motion.div
+                      key={message.id}
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      className="flex justify-center my-2"
+                    >
+                      <div className="px-4 py-2 bg-primary/10 border border-primary/20 rounded-full">
+                        <p className="text-xs text-gray-400 flex items-center gap-2">
+                          <Users className="w-3 h-3" />
+                          {message.message}
+                          <span className="text-gray-600">•</span>
+                          <span>{format(message.createdAt, 'h:mm a')}</span>
+                        </p>
+                      </div>
+                    </motion.div>
+                  );
+                }
+                
+                // Regular user messages
+                return (
               <motion.div
                 key={message.id}
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 className={`flex gap-3 ${message.userId === user?.uid ? 'flex-row-reverse' : ''}`}
               >
-                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white font-semibold flex-shrink-0">
+                <div className="w-8 h-8 rounded-full bg-gradient-green flex items-center justify-center text-dark-900 font-semibold flex-shrink-0">
                   {message.userName.charAt(0).toUpperCase()}
                 </div>
                 <div className={`flex-1 ${message.userId === user?.uid ? 'text-right' : ''}`}>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-sm font-semibold">{message.userName}</span>
+                      <div className={`flex items-center gap-2 mb-1 ${message.userId === user?.uid ? 'justify-end' : ''}`}>
+                    <span className="text-sm font-semibold text-gray-300">{message.userName}</span>
                     <span className="text-xs text-gray-500">
                       {format(message.createdAt, 'h:mm a')}
                     </span>
                   </div>
                   <div className={`inline-block px-4 py-2 rounded-2xl ${
                     message.userId === user?.uid
-                      ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white'
-                      : 'bg-gray-100'
+                      ? 'bg-gradient-green text-dark-900'
+                      : 'bg-dark-700 text-white'
                   }`}>
-                    <p className="text-sm">{message.message}</p>
+                        <p className="text-sm break-words">{message.message}</p>
                   </div>
                 </div>
               </motion.div>
-            ))}
+                );
+              })
+            )}
+            <div ref={messagesEndRef} />
           </div>
 
           {/* Message Input */}
-          <div className="border-t border-gray-200 p-4">
+          <form onSubmit={sendMessage} className="border-t border-dark-600 p-4">
             <div className="flex gap-2">
               <input
                 type="text"
                 value={newMessage}
                 onChange={(e) => setNewMessage(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
                 placeholder="Type a message..."
-                className="flex-1 px-4 py-2 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                className="flex-1 px-4 py-2 rounded-xl border border-dark-600 bg-dark-800/50 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary"
+                maxLength={500}
               />
               <button
-                onClick={sendMessage}
+                type="submit"
                 disabled={!newMessage.trim()}
-                className="btn-primary px-4"
+                className="btn-primary px-4 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Send className="w-5 h-5" />
               </button>
             </div>
-          </div>
+          </form>
         </div>
       </div>
+      
+      {/* Dropdown Menu - Rendered outside to avoid z-index issues */}
+      {showGroupMenu && menuButtonRef.current && selectedGroup && (
+        <>
+          {/* Backdrop to close menu when clicking outside */}
+          <div 
+            className="fixed inset-0 z-[100]" 
+            onClick={() => setShowGroupMenu(false)}
+          />
+          
+          <div 
+            className="fixed glass-dark rounded-xl border border-primary/20 shadow-2xl overflow-hidden z-[101] min-w-[220px]"
+            style={{
+              top: `${menuButtonRef.current.getBoundingClientRect().bottom + 8}px`,
+              right: `${window.innerWidth - menuButtonRef.current.getBoundingClientRect().right}px`,
+            }}
+          >
+            {/* Sharing Section */}
+            <div className="border-b border-white/10">
+              <button
+                onClick={() => {
+                  if (selectedGroup) generateInviteLink(selectedGroup);
+                }}
+                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/10 transition-colors text-left text-primary"
+              >
+                <Link2 className="w-4 h-4" />
+                <span>Copy Invite Link</span>
+              </button>
+              
+              <button
+                onClick={() => {
+                  if (selectedGroup) shareToWhatsApp(selectedGroup);
+                }}
+                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/10 transition-colors text-left text-green-400"
+              >
+                <MessageCircle className="w-4 h-4" />
+                <span>Share via WhatsApp</span>
+              </button>
+              
+              <button
+                onClick={() => {
+                  if (selectedGroup) shareToTelegram(selectedGroup);
+                }}
+                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/10 transition-colors text-left text-blue-400"
+              >
+                <Send className="w-4 h-4" />
+                <span>Share via Telegram</span>
+              </button>
+              
+              <button
+                onClick={() => {
+                  if (selectedGroup) shareViaGeneric(selectedGroup);
+                }}
+                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/10 transition-colors text-left text-gray-300"
+              >
+                <Share2 className="w-4 h-4" />
+                <span>Share...</span>
+              </button>
+            </div>
+            
+            {/* Member Actions Section - Show if NOT creator */}
+            {selectedGroup.createdBy !== user?.uid && (
+              <div className="border-b border-white/10">
+                <button
+                  onClick={() => {
+                    console.log('🟡 Leave Group clicked');
+                    if (selectedGroup) {
+                      setGroupToLeave(selectedGroup); // Store group
+                      setShowGroupMenu(false);
+                      setTimeout(() => setShowLeaveConfirm(true), 100);
+                    }
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/10 transition-colors text-left text-yellow-400"
+                >
+                  <LeaveIcon className="w-4 h-4" />
+                  <span>Leave Group</span>
+                </button>
+                <button
+                  onClick={() => {
+                    console.log('🟠 Delete for Me clicked');
+                    if (selectedGroup) {
+                      setGroupToDelete(selectedGroup); // Store group
+                      setShowGroupMenu(false);
+                      setTimeout(() => setShowDeleteForMeConfirm(true), 100);
+                    }
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/10 transition-colors text-left text-orange-400"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Delete for Me</span>
+                </button>
+              </div>
+            )}
+            
+            {/* Admin Actions Section - Show if IS creator */}
+            {selectedGroup.createdBy === user?.uid && (
+              <div className="border-t border-white/10">
+                <button
+                  onClick={() => {
+                    console.log('🔴 Delete Group clicked (admin)');
+                    setShowGroupMenu(false);
+                    setTimeout(() => setShowDeleteConfirm(true), 100);
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/10 transition-colors text-left text-red-400"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Delete Group</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+      </>
     );
   }
 
@@ -286,8 +727,8 @@ export default function CommunityGroups() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h3 className="text-2xl font-display font-bold">Community Groups</h3>
-          <p className="text-gray-600">Connect with like-minded individuals</p>
+          <h3 className="text-2xl font-display font-bold text-white">Community Groups</h3>
+          <p className="text-gray-400">Connect with like-minded individuals</p>
         </div>
         <button
           onClick={() => setShowCreateGroup(true)}
@@ -299,7 +740,7 @@ export default function CommunityGroups() {
       </div>
 
       {/* Search Bar */}
-      <div className="glass rounded-2xl p-4 mb-6">
+      <div className="glass-dark rounded-2xl p-4 mb-6 border border-primary/20">
         <div className="relative">
           <Search className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
           <input
@@ -307,7 +748,7 @@ export default function CommunityGroups() {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search groups..."
-            className="w-full pl-10 pr-4 py-2 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-purple-500"
+            className="w-full pl-10 pr-4 py-2 rounded-xl border border-dark-600 bg-dark-800/50 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary"
           />
         </div>
       </div>
@@ -322,8 +763,8 @@ export default function CommunityGroups() {
               onClick={() => setSelectedCategory(category.id)}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl font-semibold whitespace-nowrap transition-all ${
                 selectedCategory === category.id
-                  ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg'
-                  : 'glass hover:shadow-lg'
+                  ? 'bg-gradient-green text-dark-900 shadow-glow'
+                  : 'glass-dark text-gray-300 hover:shadow-lg hover:border-primary/40'
               }`}
             >
               <Icon className="w-4 h-4" />
@@ -347,16 +788,16 @@ export default function CommunityGroups() {
               <div className="flex items-center gap-3">
                 <div className="text-4xl">{group.icon}</div>
                 <div>
-                  <h4 className="font-bold text-lg">{group.name}</h4>
-                  <p className="text-xs text-gray-500 capitalize">{group.category}</p>
+                  <h4 className="font-bold text-lg text-white">{group.name}</h4>
+                  <p className="text-xs text-gray-400 capitalize">{group.category}</p>
                 </div>
               </div>
             </div>
 
-            <p className="text-sm text-gray-600 mb-4 line-clamp-2">{group.description}</p>
+            <p className="text-sm text-gray-400 mb-4 line-clamp-2">{group.description}</p>
 
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm text-gray-600">
+              <div className="flex items-center gap-2 text-sm text-gray-400">
                 <Users className="w-4 h-4" />
                 <span>{group.memberCount} members</span>
               </div>
@@ -364,7 +805,7 @@ export default function CommunityGroups() {
               {isUserMember(group) ? (
                 <button
                   onClick={() => setSelectedGroup(group)}
-                  className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl font-semibold hover:shadow-lg transition-all"
+                  className="flex items-center gap-2 px-4 py-2 bg-gradient-green text-dark-900 rounded-xl font-semibold hover:shadow-glow transition-all"
                 >
                   <MessageCircle className="w-4 h-4" />
                   Chat
@@ -372,7 +813,7 @@ export default function CommunityGroups() {
               ) : (
                 <button
                   onClick={() => joinGroup(group)}
-                  className="flex items-center gap-2 px-4 py-2 glass hover:shadow-lg rounded-xl font-semibold transition-all"
+                  className="flex items-center gap-2 px-4 py-2 glass-dark hover:shadow-lg hover:border-primary rounded-xl font-semibold transition-all text-gray-300"
                 >
                   <LogIn className="w-4 h-4" />
                   Join
@@ -385,9 +826,9 @@ export default function CommunityGroups() {
 
       {filteredGroups.length === 0 && (
         <div className="card text-center py-12">
-          <Users className="w-16 h-16 mx-auto mb-4 text-gray-400" />
-          <h3 className="text-xl font-semibold mb-2">No groups found</h3>
-          <p className="text-gray-600 mb-4">Be the first to create one!</p>
+          <Users className="w-16 h-16 mx-auto mb-4 text-gray-500" />
+          <h3 className="text-xl font-semibold mb-2 text-white">No groups found</h3>
+          <p className="text-gray-400 mb-4">Be the first to create one!</p>
           <button onClick={() => setShowCreateGroup(true)} className="btn-primary">
             Create Group
           </button>
@@ -396,17 +837,17 @@ export default function CommunityGroups() {
 
       {/* Create Group Modal */}
       {showCreateGroup && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="glass rounded-3xl p-8 max-w-md w-full max-h-[90vh] overflow-y-auto"
+            className="glass-dark rounded-3xl p-8 max-w-md w-full max-h-[90vh] overflow-y-auto border border-primary/20"
           >
-            <h3 className="text-2xl font-display font-bold mb-6">Create New Group</h3>
+            <h3 className="text-2xl font-display font-bold mb-6 text-white">Create New Group</h3>
 
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium mb-2">Group Name</label>
+                <label className="block text-sm font-medium mb-2 text-gray-300">Group Name</label>
                 <input
                   type="text"
                   value={newGroup.name}
@@ -417,7 +858,7 @@ export default function CommunityGroups() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-2">Description</label>
+                <label className="block text-sm font-medium mb-2 text-gray-300">Description</label>
                 <textarea
                   value={newGroup.description}
                   onChange={(e) => setNewGroup({ ...newGroup, description: e.target.value })}
@@ -427,14 +868,14 @@ export default function CommunityGroups() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-2">Category</label>
+                <label className="block text-sm font-medium mb-2 text-gray-300">Category</label>
                 <select
                   value={newGroup.category}
                   onChange={(e) => setNewGroup({ ...newGroup, category: e.target.value })}
                   className="input-glass"
                 >
                   {categories.slice(1).map((cat) => (
-                    <option key={cat.id} value={cat.id}>
+                    <option key={cat.id} value={cat.id} className="bg-dark-800 text-white">
                       {cat.name}
                     </option>
                   ))}
@@ -442,14 +883,14 @@ export default function CommunityGroups() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-2">Icon</label>
+                <label className="block text-sm font-medium mb-2 text-gray-300">Icon</label>
                 <div className="grid grid-cols-8 gap-2">
                   {groupIcons.map((icon) => (
                     <button
                       key={icon}
                       onClick={() => setNewGroup({ ...newGroup, icon })}
                       className={`text-3xl p-2 rounded-xl transition-all ${
-                        newGroup.icon === icon ? 'bg-purple-100 scale-110' : 'hover:bg-gray-100'
+                        newGroup.icon === icon ? 'bg-primary/20 scale-110 border-2 border-primary' : 'hover:bg-white/10 border-2 border-transparent'
                       }`}
                     >
                       {icon}
@@ -467,6 +908,238 @@ export default function CommunityGroups() {
                 Create Group
               </button>
             </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Delete Group Confirmation Modal */}
+      {showDeleteConfirm && selectedGroup &&  (() => {
+        const group: Group = selectedGroup as Group;
+        return (<div className="fixed inset-0 bg-black/90 backdrop-blur-xl flex items-center justify-center z-[150] p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="glass-dark rounded-3xl p-10 max-w-md w-full border-2 border-red-500/30"
+          >
+            <div className="flex items-center gap-4 mb-8">
+              <div className="w-14 h-14 rounded-2xl bg-red-500/20 flex items-center justify-center border-2 border-red-500">
+                <AlertTriangle className="w-7 h-7 text-red-500" />
+              </div>
+              <div>
+                <h3 className="text-2xl font-display font-bold text-white">Delete Group?</h3>
+                <p className="text-sm text-gray-400">This action cannot be undone</p>
+              </div>
+            </div>
+            
+            <div className="bg-dark-800/50 border border-dark-600 rounded-2xl p-5 mb-8">
+              <div className="flex items-center gap-4">
+                <div className="text-4xl">{group.icon}</div>
+                <div>
+                  <h4 className="font-bold text-lg text-white">{group.name}</h4>
+                  <p className="text-sm text-gray-400">
+                    {group.memberCount} members • {messages.length} messages
+                  </p>
+                </div>
+              </div>
+            </div>
+            
+            <p className="text-gray-400 mb-8">
+              Are you sure you want to delete this group? All messages and data will be permanently deleted. 
+              All members will lose access to this group.
+            </p>
+            
+            <div className="flex gap-4">
+              <button 
+                onClick={() => setShowDeleteConfirm(false)} 
+                className="flex-1 px-6 py-4 bg-white/5 text-white rounded-xl font-bold border border-primary/20 hover:bg-white/10 transition-all"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={() => deleteGroup(group)} 
+                className="flex-1 px-6 py-4 bg-red-500 hover:bg-red-600 text-white rounded-xl font-bold transition-colors shadow-lg"
+              >
+                Delete Group
+              </button>
+            </div>
+          </motion.div>
+        </div>);
+      })()}
+
+      {/* Leave Group Confirmation Modal */}
+      {showLeaveConfirm && groupToLeave && (() => {
+        const group: Group = groupToLeave as Group;
+        console.log('✅ Leave Group modal rendering for:', group.name);
+        return (<div className="fixed inset-0 bg-black/90 backdrop-blur-xl flex items-center justify-center z-[150] p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="glass-dark rounded-3xl p-10 max-w-md w-full border-2 border-orange-500/30"
+          >
+            <div className="flex items-center gap-4 mb-8">
+              <div className="w-14 h-14 rounded-2xl bg-orange-500/20 flex items-center justify-center border-2 border-orange-500">
+                <LeaveIcon className="w-7 h-7 text-orange-500" />
+              </div>
+              <div>
+                <h3 className="text-2xl font-display font-bold text-white">Leave Group?</h3>
+                <p className="text-sm text-gray-400">You can rejoin anytime</p>
+              </div>
+            </div>
+            
+            <div className="bg-dark-800/50 border border-dark-600 rounded-2xl p-5 mb-8">
+              <div className="flex items-center gap-4">
+                <div className="text-4xl">{group.icon}</div>
+                <div>
+                  <h4 className="font-bold text-lg text-white">{group.name}</h4>
+                  <p className="text-sm text-gray-400">
+                    {group.memberCount} members
+                  </p>
+                </div>
+              </div>
+            </div>
+            
+            <p className="text-gray-400 mb-8">
+              Are you sure you want to leave "{group.name}"? You'll need to join again to see messages and participate.
+            </p>
+            
+            <div className="flex gap-4">
+              <button 
+                onClick={() => {
+                  setShowLeaveConfirm(false);
+                  setGroupToLeave(null);
+                }} 
+                className="flex-1 px-6 py-4 bg-white/5 text-white rounded-xl font-bold border border-primary/20 hover:bg-white/10 transition-all"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={() => {
+                  leaveGroup(group);
+                  setGroupToLeave(null);
+                }} 
+                className="flex-1 px-6 py-4 bg-orange-500 hover:bg-orange-600 text-white rounded-xl font-bold transition-colors shadow-lg"
+              >
+                Leave Group
+              </button>
+            </div>
+          </motion.div>
+        </div>);
+      })()}
+
+      {/* Delete For Me Confirmation Modal */}
+      {(() => {
+        console.log('🔍 Modal check - showDeleteForMeConfirm:', showDeleteForMeConfirm, 'groupToDelete:', groupToDelete);
+        if (showDeleteForMeConfirm && groupToDelete) {
+          const group: Group = groupToDelete as Group;
+          console.log('✅ Delete for Me modal rendering for:', group.name);
+          return (<div className="fixed inset-0 bg-black/90 backdrop-blur-xl flex items-center justify-center z-[150] p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="glass-dark rounded-3xl p-10 max-w-md w-full border-2 border-orange-500/30"
+          >
+            <div className="flex items-center gap-4 mb-8">
+              <div className="w-14 h-14 rounded-2xl bg-orange-500/20 flex items-center justify-center border-2 border-orange-500">
+                <Trash2 className="w-7 h-7 text-orange-500" />
+              </div>
+              <div>
+                <h3 className="text-2xl font-display font-bold text-white">Delete for Me?</h3>
+                <p className="text-sm text-gray-400">Group stays for others</p>
+              </div>
+            </div>
+            
+            <div className="bg-dark-800/50 border border-dark-600 rounded-2xl p-5 mb-8">
+              <div className="flex items-center gap-4">
+                <div className="text-4xl">{group.icon}</div>
+                <div>
+                  <h4 className="font-bold text-lg text-white">{group.name}</h4>
+                  <p className="text-sm text-gray-400">
+                    {group.memberCount} members
+                  </p>
+                </div>
+              </div>
+            </div>
+            
+            <p className="text-gray-400 mb-8">
+              This will remove "{group.name}" from your group list. The group will still exist for other members. 
+              You can rejoin using an invite link.
+            </p>
+            
+            <div className="flex gap-4">
+              <button 
+                onClick={() => {
+                  setShowDeleteForMeConfirm(false);
+                  setGroupToDelete(null);
+                }} 
+                className="flex-1 px-6 py-4 bg-white/5 text-white rounded-xl font-bold border border-primary/20 hover:bg-white/10 transition-all"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={() => {
+                  deleteForMe(group);
+                  setGroupToDelete(null);
+                }} 
+                className="flex-1 px-6 py-4 bg-orange-500 hover:bg-orange-600 text-white rounded-xl font-bold transition-colors shadow-lg"
+              >
+                Delete for Me
+              </button>
+            </div>
+          </motion.div>
+        </div>);
+        }
+        return null;
+      })()}
+
+      {/* Invite Link Modal */}
+      {showInviteLink && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-xl flex items-center justify-center z-[150] p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="glass-dark rounded-3xl p-10 max-w-md w-full border-2 border-primary/30"
+          >
+            <div className="flex items-center justify-between mb-8">
+              <div className="flex items-center gap-4">
+                <div className="w-14 h-14 rounded-2xl bg-primary/20 flex items-center justify-center border-2 border-primary">
+                  <Link2 className="w-7 h-7 text-primary" />
+                </div>
+                <div>
+                  <h3 className="text-2xl font-display font-bold text-white">Invite Link</h3>
+                  <p className="text-sm text-gray-400">Share this link with others</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowInviteLink(false)}
+                className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+              >
+                <X className="w-6 h-6 text-gray-400" />
+              </button>
+            </div>
+            
+            <div className="bg-dark-800/50 border border-primary/20 rounded-xl p-4 mb-6">
+              <div className="flex items-center justify-between gap-3">
+                <code className="text-sm text-primary flex-1 truncate">{inviteLink}</code>
+                <button
+                  onClick={copyInviteLink}
+                  className="flex items-center gap-2 px-4 py-2 bg-primary/20 text-primary hover:bg-primary/30 rounded-lg font-semibold transition-colors flex-shrink-0"
+                >
+                  <Copy className="w-4 h-4" />
+                  Copy
+                </button>
+              </div>
+            </div>
+            
+            <p className="text-gray-400 text-sm mb-6">
+              Anyone with this link can join the group. Share it via messaging apps, email, or social media.
+            </p>
+            
+            <button 
+              onClick={() => setShowInviteLink(false)} 
+              className="w-full px-6 py-4 bg-gradient-green text-black rounded-xl font-bold shadow-glow hover:shadow-glow-lg transition-all"
+            >
+              Done
+            </button>
           </motion.div>
         </div>
       )}

@@ -280,6 +280,8 @@ export default function ChallengesPage() {
   };
 
   const checkAllChallenges = async () => {
+    if (!userData) return; // Need userData to check challenges
+    
     const newlyCompleted: number[] = [];
     
     for (const challenge of challenges) {

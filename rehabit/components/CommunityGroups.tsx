@@ -81,6 +81,7 @@ export default function CommunityGroups() {
 
   useEffect(() => {
     fetchGroups();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Refetch groups when userData changes (especially deletedGroups)
@@ -88,6 +89,7 @@ export default function CommunityGroups() {
     if (userData) {
       fetchGroups();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userData?.deletedGroups]);
 
   useEffect(() => {
@@ -958,7 +960,7 @@ export default function CommunityGroups() {
             </div>
             
             <p className="text-gray-400 mb-8">
-              Are you sure you want to leave "{group.name}"? You'll need to join again to see messages and participate.
+              Are you sure you want to leave &quot;{group.name}&quot;? You&apos;ll need to join again to see messages and participate.
             </p>
             
             <div className="flex gap-4">
@@ -1018,7 +1020,7 @@ export default function CommunityGroups() {
             </div>
             
             <p className="text-gray-400 mb-8">
-              This will remove "{group.name}" from your group list. The group will still exist for other members. 
+              This will remove &quot;{group.name}&quot; from your group list. The group will still exist for other members. 
               You can rejoin using an invite link.
             </p>
             

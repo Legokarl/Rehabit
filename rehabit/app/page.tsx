@@ -488,13 +488,13 @@ export default function Home() {
                 Ready to <span className="text-gradient-green">Start?</span>
           </h2>
               <p className="text-xl text-gray-400 mb-10 max-w-2xl mx-auto">
-                Users from more than 150 countries around the world have joined! Don't miss out.
+                Users from more than 150 countries around the world have joined! Don&apos;t miss out.
           </p>
           <button
             onClick={() => router.push('/auth')}
                 className="px-12 py-5 bg-gradient-green text-black rounded-2xl font-bold text-lg shadow-glow-lg hover:scale-105 transition-all"
           >
-                Join Now - It's Free!
+                Join Now - It&apos;s Free!
           </button>
             </div>
         </motion.div>

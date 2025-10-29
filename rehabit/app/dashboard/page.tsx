@@ -911,7 +911,7 @@ export default function DashboardPage() {
             <h3 className="text-5xl font-display font-black mb-3 text-gradient-green">Level Up!</h3>
             <div className="text-7xl font-black mb-6 text-white">Level {newLevelReached}</div>
             <p className="text-xl text-gray-400 mb-8">
-              Congratulations! You're making amazing progress! 🎉
+              Congratulations! You&apos;re making amazing progress! 🎉
             </p>
             
             <button 

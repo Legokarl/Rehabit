@@ -640,7 +640,7 @@ export default function ChallengesPage() {
               <h2 className="text-4xl font-black mb-3 text-gradient-green">Level Up!</h2>
               <p className="text-6xl font-black mb-4 text-white">Level {userChallenges.challengeLevel}</p>
               <p className="text-xl text-gray-400">
-                Amazing! You've reached a new challenge level! 🎉
+                Amazing! You&apos;ve reached a new challenge level! 🎉
               </p>
             </motion.div>
           </motion.div>

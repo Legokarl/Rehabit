@@ -20,7 +20,7 @@ const CHALLENGE_POOL = [
     xp: 50, 
     icon: Brain, 
     difficulty: 'easy',
-    checkCondition: (userData: any, habits: any[]) => {
+    checkCondition: (userData: UserData, habits: Habit[]) => {
       const today = new Date().toDateString();
       const completedToday = habits.filter(h => 
         h.completedDates?.some((d: Date) => new Date(d).toDateString() === today)
@@ -34,7 +34,7 @@ const CHALLENGE_POOL = [
     xp: 100, 
     icon: Zap, 
     difficulty: 'medium',
-    checkCondition: (userData: any, habits: any[]) => {
+    checkCondition: (userData: UserData, habits: Habit[]) => {
       return habits.some(h => (h.streak || 0) >= 7);
     }
   },
@@ -44,7 +44,7 @@ const CHALLENGE_POOL = [
     xp: 30, 
     icon: Code, 
     difficulty: 'easy',
-    checkCondition: (userData: any, habits: any[]) => {
+    checkCondition: (userData: UserData, habits: Habit[]) => {
       return habits.length >= 1;
     }
   },
@@ -54,7 +54,7 @@ const CHALLENGE_POOL = [
     xp: 150, 
     icon: Puzzle, 
     difficulty: 'hard',
-    checkCondition: (userData: any, habits: any[]) => {
+    checkCondition: (userData: UserData, habits: Habit[]) => {
       return (userData?.level || 1) >= 5;
     }
   },
@@ -64,7 +64,7 @@ const CHALLENGE_POOL = [
     xp: 75, 
     icon: Flame, 
     difficulty: 'medium',
-    checkCondition: (userData: any, habits: any[]) => {
+    checkCondition: (userData: UserData, habits: Habit[]) => {
       return habits.some(h => (h.streak || 0) >= 3);
     }
   },
@@ -74,7 +74,7 @@ const CHALLENGE_POOL = [
     xp: 40, 
     icon: Target, 
     difficulty: 'easy',
-    checkCondition: (userData: any, habits: any[]) => {
+    checkCondition: (userData: UserData, habits: Habit[]) => {
       return habits.length >= 5;
     }
   },
@@ -84,7 +84,7 @@ const CHALLENGE_POOL = [
     xp: 200, 
     icon: Star, 
     difficulty: 'hard',
-    checkCondition: (userData: any, habits: any[]) => {
+    checkCondition: (userData: UserData, habits: Habit[]) => {
       return (userData?.xp || 0) >= 500;
     }
   },
@@ -94,7 +94,7 @@ const CHALLENGE_POOL = [
     xp: 80, 
     icon: TrendingUp, 
     difficulty: 'medium',
-    checkCondition: (userData: any, habits: any[]) => {
+    checkCondition: (userData: UserData, habits: Habit[]) => {
       return habits.some(h => (h.completedDates?.length || 0) >= 10);
     }
   },
@@ -104,7 +104,7 @@ const CHALLENGE_POOL = [
     xp: 120, 
     icon: Trophy, 
     difficulty: 'medium',
-    checkCondition: (userData: any, habits: any[]) => {
+    checkCondition: (userData: UserData, habits: Habit[]) => {
       return (userData?.level || 1) >= 3;
     }
   },
@@ -114,7 +114,7 @@ const CHALLENGE_POOL = [
     xp: 60, 
     icon: Award, 
     difficulty: 'easy',
-    checkCondition: (userData: any, habits: any[]) => {
+    checkCondition: (userData: UserData, habits: Habit[]) => {
       const today = new Date().toDateString();
       const completedToday = habits.filter(h => 
         h.completedDates?.some((d: Date) => new Date(d).toDateString() === today)
@@ -128,11 +128,22 @@ interface Challenge {
   id: number;
   title: string;
   xp: number;
-  icon: any;
+  icon: React.ComponentType<{ className?: string }>;
   difficulty: string;
   status: 'locked' | 'in_progress' | 'completed';
-  checkCondition?: (userData: any, habits: any[]) => boolean;
+  checkCondition?: (userData: UserData, habits: Habit[]) => boolean;
   progress?: number;
+}
+
+interface Habit {
+  id: string;
+  completedDates?: Date[];
+  streak?: number;
+}
+
+interface UserData {
+  xp?: number;
+  level?: number;
 }
 
 interface UserChallenges {
@@ -147,7 +158,7 @@ export default function ChallengesPage() {
   const router = useRouter();
   
   const [challenges, setChallenges] = useState<Challenge[]>([]);
-  const [habits, setHabits] = useState<any[]>([]);
+  const [habits, setHabits] = useState<Habit[]>([]);
   const [userChallenges, setUserChallenges] = useState<UserChallenges>({
     activeChallenges: [],
     completedChallenges: [],
@@ -177,14 +188,16 @@ export default function ChallengesPage() {
       initializeChallenges();
     }
     setLoading(false);
-  }, [user, router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
 
   // Auto-check challenges when habits or userData changes
   useEffect(() => {
     if (habits.length > 0 && challenges.length > 0 && userData) {
       checkAllChallenges();
     }
-  }, [habits, userData]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [habits, userData, challenges]);
 
   const initializeChallenges = () => {
     const randomChallenges = getRandomChallenges(3);
@@ -243,13 +256,16 @@ export default function ChallengesPage() {
         where('userId', '==', user.uid)
       );
       const querySnapshot = await getDocs(q);
-      const habitsData = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        createdAt: doc.data().createdAt?.toDate(),
-        lastCompleted: doc.data().lastCompleted?.toDate(),
-        completedDates: doc.data().completedDates?.map((d: any) => d.toDate()) || [],
-      }));
+      const habitsData = querySnapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          createdAt: data.createdAt?.toDate(),
+          lastCompleted: data.lastCompleted?.toDate(),
+          completedDates: data.completedDates?.map((d: { toDate: () => Date }) => d.toDate()) || [],
+        };
+      }) as Habit[];
       
       setHabits(habitsData);
     } catch (error) {

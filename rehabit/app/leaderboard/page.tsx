@@ -37,7 +37,8 @@ export default function LeaderboardPage() {
     }
     
     fetchLeaderboard();
-  }, [user, router, timeFrame]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, timeFrame]);
 
   const fetchLeaderboard = async () => {
     try {

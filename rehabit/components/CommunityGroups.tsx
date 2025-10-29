@@ -86,7 +86,6 @@ export default function CommunityGroups() {
   // Refetch groups when userData changes (especially deletedGroups)
   useEffect(() => {
     if (userData) {
-      console.log('👤 userData changed, refetching groups...');
       fetchGroups();
     }
   }, [userData?.deletedGroups]);
@@ -132,7 +131,6 @@ export default function CommunityGroups() {
   }, [messages]);
 
   const fetchGroups = async () => {
-    console.log('🔄 Fetching groups...');
     try {
       const q = query(collection(db, 'groups'));
       const querySnapshot = await getDocs(q);
@@ -143,19 +141,12 @@ export default function CommunityGroups() {
         memberCount: doc.data().members?.length || 0,
       })) as Group[];
       
-      console.log(`📊 Total groups fetched: ${groupsData.length}`);
-      console.log('🗑️ Deleted groups from userData:', userData?.deletedGroups || []);
-      
       // Filter out groups that user has "deleted for me"
       if (user && userData?.deletedGroups && userData.deletedGroups.length > 0) {
-        const beforeFilter = groupsData.length;
         groupsData = groupsData.filter(group => !userData.deletedGroups!.includes(group.id));
-        console.log(`✂️ Filtered ${beforeFilter - groupsData.length} deleted groups`);
-        console.log(`✅ Groups after filter: ${groupsData.length}`);
       }
       
       setGroups(groupsData);
-      console.log('✅ Groups state updated');
     } catch (error) {
       console.error('❌ Error fetching groups:', error);
     }
@@ -228,11 +219,8 @@ export default function CommunityGroups() {
       return;
     }
 
-    console.log('Leaving group:', group.id);
-
     try {
       // Send system message that user left BEFORE removing from members
-      console.log('Posting leave message...');
       await addDoc(collection(db, 'groupMessages'), {
         groupId: group.id,
         userId: user.uid,
@@ -243,13 +231,10 @@ export default function CommunityGroups() {
         type: 'system',
       });
       
-      console.log('Removing user from members...');
       const groupRef = doc(db, 'groups', group.id);
       await updateDoc(groupRef, {
         members: arrayRemove(user.uid)
       });
-      
-      console.log('User left successfully');
       
       // Close modals and reset state
       setShowLeaveConfirm(false);
@@ -280,8 +265,6 @@ export default function CommunityGroups() {
       return;
     }
 
-    console.log('Starting group deletion:', group.id);
-
     try {
       // Delete all messages in the group first
       const messagesQuery = query(
@@ -289,24 +272,18 @@ export default function CommunityGroups() {
         where('groupId', '==', group.id)
       );
       
-      console.log('Fetching messages to delete...');
       const messagesSnapshot = await getDocs(messagesQuery);
-      console.log(`Found ${messagesSnapshot.docs.length} messages to delete`);
       
       if (messagesSnapshot.docs.length > 0) {
         const deletePromises = messagesSnapshot.docs.map(messageDoc => {
-          console.log('Deleting message:', messageDoc.id);
           return deleteDoc(doc(db, 'groupMessages', messageDoc.id));
         });
         await Promise.all(deletePromises);
-        console.log('All messages deleted');
       }
 
       // Delete the group itself
-      console.log('Deleting group document...');
       const groupRef = doc(db, 'groups', group.id);
       await deleteDoc(groupRef);
-      console.log('Group document deleted successfully');
       
       // Close modal and reset state
       setShowDeleteConfirm(false);
@@ -331,9 +308,6 @@ export default function CommunityGroups() {
   };
 
   const deleteForMe = async (group: Group) => {
-    console.log('=== DELETE FOR ME STARTED ===');
-    console.log('Group:', group.name, group.id);
-    
     if (!user) {
       console.error('❌ No user found');
       alert('You must be logged in to delete a group.');
@@ -346,23 +320,15 @@ export default function CommunityGroups() {
       return;
     }
 
-    console.log('✅ User ID:', user.uid);
-    console.log('Current deletedGroups:', userData.deletedGroups || []);
-
     try {
       const userRef = doc(db, 'users', user.uid);
-      console.log('📝 Updating user document...');
       
       await updateDoc(userRef, {
         deletedGroups: arrayUnion(group.id)
       });
       
-      console.log('✅ Firestore updated successfully');
-      
       // Refresh user data to update deletedGroups in context
-      console.log('🔄 Refreshing user data...');
       await refreshUserData();
-      console.log('✅ User data refreshed');
       
       // Close modals and reset state
       setShowDeleteForMeConfirm(false);
@@ -370,11 +336,8 @@ export default function CommunityGroups() {
       setShowGroupMenu(false);
       
       // Refresh groups list
-      console.log('🔄 Refreshing groups list...');
       await fetchGroups();
-      console.log('✅ Groups list refreshed');
       
-      console.log('=== DELETE FOR ME COMPLETED ===');
       alert(`"${group.name}" has been removed from your list. You can rejoin via invite link.`);
     } catch (error: any) {
       console.error('❌ ERROR in deleteForMe:');
@@ -426,7 +389,7 @@ export default function CommunityGroups() {
         title: `Join ${group.name}`,
         text: `Hey! Join our group "${group.name}" on Rehabit!\n\n${group.description}`,
         url: link
-      }).catch(err => console.log('Error sharing:', err));
+      }).catch(err => console.error('Error sharing:', err));
     } else {
       // Fallback: copy to clipboard
       navigator.clipboard.writeText(link);
@@ -670,7 +633,6 @@ export default function CommunityGroups() {
               <div className="border-b border-white/10">
                 <button
                   onClick={() => {
-                    console.log('🟡 Leave Group clicked');
                     if (selectedGroup) {
                       setGroupToLeave(selectedGroup); // Store group
                       setShowGroupMenu(false);
@@ -684,7 +646,6 @@ export default function CommunityGroups() {
                 </button>
                 <button
                   onClick={() => {
-                    console.log('🟠 Delete for Me clicked');
                     if (selectedGroup) {
                       setGroupToDelete(selectedGroup); // Store group
                       setShowGroupMenu(false);
@@ -704,7 +665,6 @@ export default function CommunityGroups() {
               <div className="border-t border-white/10">
                 <button
                   onClick={() => {
-                    console.log('🔴 Delete Group clicked (admin)');
                     setShowGroupMenu(false);
                     setTimeout(() => setShowDeleteConfirm(true), 100);
                   }}
@@ -969,7 +929,6 @@ export default function CommunityGroups() {
       {/* Leave Group Confirmation Modal */}
       {showLeaveConfirm && groupToLeave && (() => {
         const group: Group = groupToLeave as Group;
-        console.log('✅ Leave Group modal rendering for:', group.name);
         return (<div className="fixed inset-0 bg-black/90 backdrop-blur-xl flex items-center justify-center z-[150] p-4">
           <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
@@ -1028,10 +987,8 @@ export default function CommunityGroups() {
 
       {/* Delete For Me Confirmation Modal */}
       {(() => {
-        console.log('🔍 Modal check - showDeleteForMeConfirm:', showDeleteForMeConfirm, 'groupToDelete:', groupToDelete);
         if (showDeleteForMeConfirm && groupToDelete) {
           const group: Group = groupToDelete as Group;
-          console.log('✅ Delete for Me modal rendering for:', group.name);
           return (<div className="fixed inset-0 bg-black/90 backdrop-blur-xl flex items-center justify-center z-[150] p-4">
           <motion.div
             initial={{ opacity: 0, scale: 0.9 }}

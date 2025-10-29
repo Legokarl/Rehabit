@@ -48,7 +48,8 @@ export default function CommunityChallengesPage() {
     // Refresh every 30 seconds
     const interval = setInterval(fetchChallenges, 30000);
     return () => clearInterval(interval);
-  }, [user, router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
 
   const fetchChallenges = async () => {
     try {

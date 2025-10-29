@@ -226,8 +226,8 @@ export default function ChallengesPage() {
       const isCompleted = data.completedChallenges.includes(id);
       let progress = 0;
       
-      // Calculate progress if condition exists
-      if (challenge.checkCondition && userData && habits.length > 0) {
+      // Calculate progress if we have data
+      if (userData && habits.length > 0) {
         // Try to determine progress (this is a simple estimation)
         if (isCompleted) {
           progress = 100;
